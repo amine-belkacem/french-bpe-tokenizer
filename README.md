@@ -410,6 +410,72 @@ It installs Python 3.12 and the pinned packages inside the project folder,
 downloads the data, checks the test set is byte-identical to the PC one,
 re-runs the C/Python differential test on the Pi, then measures.
 
+## Robustness: the same text, written differently (milestone 6)
+
+Real French text is not always clean NFC with straight apostrophes. I
+applied five perturbations to both test sets (`src/frbpe/perturb.py`) and
+counted tokens again with the nine tokenizers of milestone 3:
+
+| Perturbation | Example | Where it happens |
+|---|---|---|
+| no accents | `école` → `ecole` | typed on a QWERTY keyboard, SMS |
+| upper case | `l'été` → `L'ÉTÉ` | titles, legal text, shouting |
+| curly apostrophes | `'` → `’` | word processors |
+| NFD | `é` → `e` + U+0301 | files from macOS, some PDF extractors |
+| no no-break spaces | `prix⍽:` → `prix :` | cleaning scripts, plain-text editors |
+
+![Tokens per word after each perturbation](figures/robustness.png)
+
+I first plotted the change in percent and it told the wrong story: a
+tokenizer that starts very low pays a large percentage and can still end up
+better than the others. The figure shows tokens per word instead, counted on
+the original words.
+
+| Tokens per word, Wikipedia test set | original | upper case | NFD | no accents |
+|---|---|---|---|---|
+| frbpe, French regex, 32k | **1.44** | 3.60 | 2.00 | **1.59** |
+| SentencePiece BPE, same corpus | 1.54 | 3.59 | 2.09 | 1.68 |
+| CamemBERT base | 1.48 | 2.46 | **1.48** | **1.59** |
+| o200k_base (GPT-4o) | 1.59 | **2.44** | 1.86 | 1.61 |
+| cl100k_base (GPT-4) | 1.82 | 2.57 | 2.06 | 1.77 |
+
+What it shows:
+
+- **Upper case is where specialisation costs the most.** On the Wikipedia
+  test set, all four tokenizers trained on my 100 MB of Wikipedia end up at
+  3.6 tokens per word (+111 to +150 % over both test sets), worse than every
+  existing model, GPT-2 included (2.79). Wikipedia has almost no text in capitals, so the vocabulary never
+  learned it. This is the price of a small monolingual training set, and the
+  first thing I would fix (by adding upper-case text to the training data,
+  which I have not done).
+- **NFD costs every tokenizer that does not normalise: +24 to +39 % for mine,
+  +9 to +17 % for the big ones.** My regex cuts NFD words at each combining
+  mark (`e`, `́te`), but SentencePiece BPE, which has no regex at all,
+  pays almost as much (+35.5 % against +39.0 % on Wikipedia), so most of the
+  cost comes from a vocabulary learned on NFC text. CamemBERT pays
+  **nothing**: its NFKC normalisation recomposes the accents before
+  tokenizing. Here being lossy is an advantage.
+- **Curly apostrophes: the French regex is the most robust.** +0.04 % on
+  Wikipedia against +0.99 % for the same BPE with the GPT-4 regex. I checked
+  the vocabularies: with the GPT-4 regex, 1,244 tokens start with `'`
+  (`'école`) but only 265 with `’`, so switching apostrophes breaks most of
+  them. With the French regex the apostrophe stays on the elided word, and
+  the vocabulary holds both forms of the common ones (42 with `'`, 18 with
+  `’`); the word after it does not change.
+- **Removing accents costs mine +5 to +11 %, and helps GPT-2 (−7 %).** An
+  English-centric vocabulary is more at ease with French written in ASCII.
+- **Every tokenizer stays lossless** on the perturbed text except CamemBERT,
+  which was not lossless to begin with.
+
+Full table: `results/robustness.csv` (with the paired 95 % intervals and the
+share of documents each perturbation actually touches; for example, none of
+the novels has a no-break space). Examples of segmentation:
+[`results/robustness_examples.md`](results/robustness_examples.md).
+
+```bash
+python scripts/robustness.py
+```
+
 ## Tests
 
 ```bash
