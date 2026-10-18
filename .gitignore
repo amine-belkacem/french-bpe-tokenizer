@@ -10,6 +10,7 @@ htmlcov/
 # Data is downloaded and rebuilt by the scripts, never committed
 data/raw/
 data/processed/
+data/reference/
 
 # C build output
 build/

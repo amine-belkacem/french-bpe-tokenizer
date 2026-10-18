@@ -184,6 +184,76 @@ Limits of this experiment:
   while other heavy jobs were running on the machine. They are not a speed
   benchmark; that comes in milestone 5.
 
+## Against the tokenizers of existing models (milestone 3)
+
+Nine tokenizers on the same two test sets. Four are trained on my corpus
+(blue), five come from existing models (grey):
+
+| Tokenizer | Vocab | Trained on |
+|---|---|---|
+| frbpe, French regex | 32k | my 100 MB of Wikipedia |
+| frbpe, GPT-4 regex | 32k | same |
+| SentencePiece BPE / Unigram | 32k | same, settings matched to frbpe (byte fallback, no normalisation) |
+| CamemBERT base | 32k | French OSCAR, per the CamemBERT paper |
+| Mistral 7B v0.1 | 32k | not disclosed |
+| GPT-2 | 50k | English WebText, per the GPT-2 paper |
+| cl100k_base (GPT-4), o200k_base (GPT-4o) | 100k / 200k | not disclosed |
+
+![Fertility of nine tokenizers](figures/comparison_fertility.png)
+
+| Extra tokens vs frbpe-fr-32k (95 % CI) | Wikipedia | Novels | `decode(encode(x)) == x` |
+|---|---|---|---|
+| frbpe, GPT-4 regex | +2.5 % [+2.4, +2.6] | +0.4 % [+0.4, +0.4] | 100 % |
+| SentencePiece BPE (same corpus) | +7.1 % [+6.7, +7.4] | +8.5 % [+8.3, +8.6] | 100 % |
+| SentencePiece Unigram (same corpus) | +7.7 % [+7.3, +8.1] | +9.4 % [+9.2, +9.5] | 100 % |
+| CamemBERT base | +2.5 % [+2.0, +2.9] | −1.8 % [−2.0, −1.6] | **0 %** |
+| Mistral 7B v0.1 | +43.8 % [+43.0, +44.6] | +30.9 % [+30.6, +31.2] | 100 % |
+| GPT-2 | +49.1 % [+48.1, +50.2] | +47.0 % [+46.5, +47.3] | 100 % |
+| cl100k_base (GPT-4) | +26.6 % [+25.9, +27.3] | +15.8 % [+15.5, +16.0] | 100 % |
+| o200k_base (GPT-4o) | +10.7 % [+10.1, +11.2] | +1.3 % [+1.1, +1.4] | 100 % |
+
+Every document is encoded whole. Full table with fertility and bytes per
+token: `results/comparison.csv`. How each tokenizer cuts six sentences:
+[`results/segmentation_examples.md`](results/segmentation_examples.md).
+
+What I take from it, and what I do not:
+
+- **This is not "my tokenizer beats GPT-4o".** frbpe is French-only, and its
+  Wikipedia test set comes from the same source as its training data. The
+  big tokenizers share their vocabulary between dozens of languages and code.
+  What the table does measure is the price French pays in those tokenizers:
+  the same text costs 27 % more tokens with GPT-4's tokenizer than with a
+  32k French one, 11 % more with GPT-4o's.
+- **The novels are the fairer test**, since no tokenizer here was trained on
+  them. The gap with GPT-4o shrinks to 1.3 %: a 200k multilingual vocabulary
+  covers literary French almost as well as a 32k French one.
+- **My first SentencePiece numbers were unfair to SentencePiece**, and I only
+  saw it because they looked too good for me. SentencePiece trains on one line
+  at a time, so it never learns a newline (each costs a byte token), and the
+  first word of a paragraph misses the `▁` prefix it expects. Encoding each
+  paragraph alone and not counting newlines (columns `paragraph_change_*` in
+  the CSV), the gap drops to **+2.4 % on Wikipedia** and **+5.1 % on the
+  novels** for SentencePiece BPE. Part of the gap is my protocol, part is
+  real; I report both.
+- **CamemBERT is not lossless.** Its NFKC normalisation and whitespace
+  cleaning delete newlines, turn no-break spaces into plain spaces and map
+  unknown characters to `<unk>` (1,408 of them in the first 500 Wikipedia
+  test documents). Paragraph breaks cost it zero tokens because it throws
+  them away, which explains part of its good score on the novels.
+- **Mistral splits numbers into single digits.** That costs it at most 4.3 %
+  on Wikipedia and 0.1 % on the novels (counted from the digits in the test
+  sets), so it is a small part of its +31 to +44 %. Most of the gap is a
+  vocabulary built mostly for English: `␣ferm|ée`, `␣él|è|ves`.
+
+Reference files are downloaded by `scripts/download_reference.py` (about
+8 MB, checked by SHA-256) and are not committed:
+
+```bash
+python scripts/download_reference.py
+python scripts/train_sentencepiece.py
+python scripts/compare_tokenizers.py
+```
+
 ## Tests
 
 ```bash
