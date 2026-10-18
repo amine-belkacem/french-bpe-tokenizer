@@ -254,6 +254,77 @@ python scripts/train_sentencepiece.py
 python scripts/compare_tokenizers.py
 ```
 
+## A C encoder that gives the same ids (milestone 4)
+
+`c/` is an encoder in C99 with no dependency beyond the standard library, so
+it can run where Python cannot. It loads the same `models/*.bpe` files and
+must produce exactly the ids of the Python reference. Training stays in
+Python.
+
+```bash
+make -C c test          # library, command line tool, C unit tests
+make -C c SAN=1 test    # same under AddressSanitizer + UBSan (Linux)
+```
+
+```c
+frbpe_model *m;
+if (frbpe_load("models/fr_32k.bpe", &m) != FRBPE_OK) { /* ... */ }
+uint32_t ids[256];
+long n = frbpe_encode(m, text, strlen(text), ids, 256);  /* n > 256: call again bigger */
+frbpe_free(m);
+```
+
+The hard part was not BPE, it was the regex. I did not want a regex library
+in an embedded encoder, so `c/src/pretokenize.c` reimplements each branch of
+the pattern by hand. Two things made it tractable:
+
+- **Unicode tables generated from the reference itself.**
+  `scripts/gen_unicode_tables.py` asks the Python `regex` module, code point by
+  code point, what is a letter, a number, a space or a word character. Both
+  sides then agree on the Unicode version. It also found two case-folding
+  surprises I would not have guessed: `(?i:s)` matches `ſ` (U+017F) and
+  `(?i:i)` matches `İ` (U+0130).
+- **Backtracking written out where it matters.** Possessive quantifiers are
+  plain loops. The whitespace branch `\s*[\r\n]|\s+(?!\S)` and the list of
+  elided words are the only places where the regex gives characters back,
+  and each is commented with the reasoning.
+
+BPE itself uses a linked list of tokens and a min-heap of (rank, position),
+so each merge costs O(log n) instead of rescanning the chunk. `c/src/bpe.c`
+explains why popping equal ranks by position gives the same result as the
+Python left-to-right sweep.
+
+How I know it matches:
+
+| Check | Result |
+|---|---|
+| C unit tests (`c/tests/test_frbpe.c`), expected values by hand | 34 checks, 0 failures |
+| Chunks vs Python regex, 5 patterns × 3,008 random and tricky strings | identical |
+| Ids vs Python, real 32k models, 2,008 strings | identical |
+| **Ids vs Python, 9 models × all 2,340 test documents (~28 M tokens)** | **0 documents differ** |
+| CI: gcc and clang, ASan + UBSan, unit and differential tests | run on every push |
+
+To check that the differential test can fail, I removed the narrow no-break
+space from the C French rules: exactly the 4 tests that depend on it failed,
+the GPT-4 ones still passed. The full comparison is
+`scripts/diff_c_python.py` (needs the data); its output is in
+`results/c_python_differential.csv`.
+
+Problems worth mentioning:
+
+- `long` is 32 bits on 64-bit Windows and 64 bits on Linux. `-Wconversion
+  -Werror` caught it on the first Windows build.
+- On Windows, `stdin` and `stdout` are opened in text mode: `\n` becomes
+  `\r\n` and byte 0x1A ends the input. The command line tool switches both to
+  binary mode, otherwise every document with a newline came out wrong.
+- My first differential test trained a toy model inside the test. A guard
+  showed it only learned ~190 merges, so it proved little; the test now uses
+  the committed 32k models.
+
+On Windows I build with [w64devkit](https://github.com/skeeto/w64devkit)
+2.10.0 (gcc 16.2). MinGW has no sanitizers, so ASan and UBSan only run in CI
+on Linux. Speed is not measured yet; that is the next milestone.
+
 ## Tests
 
 ```bash

@@ -18,3 +18,27 @@ jobs:
       - name: Run tests
         # The tests build their own tiny corpora, they never need data/.
         run: pytest --cov=frbpe --cov-report=term-missing --cov-fail-under=90
+
+  c:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Release build (warnings are errors)
+        run: make -C c CC=${{ matrix.cc }}
+      - name: Unit tests under ASan + UBSan
+        run: |
+          make -C c clean
+          make -C c CC=${{ matrix.cc }} SAN=1 test
+      - name: C vs Python differential tests, sanitized binary
+        env:
+          FRBPE_CLI: c/build/frbpe_cli
+        run: |
+          pip install -r requirements.txt
+          pytest tests/test_c_differential.py -v
