@@ -1,0 +1,11 @@
+{
+  "pattern": "fr_elision",
+  "requested_vocab_size": 32000,
+  "vocab_size": 32000,
+  "merges": 31744,
+  "train_file": "data/processed/train_wiki.jsonl",
+  "train_seconds": 182.6,
+  "fingerprint": "c96f519376cecdd444f151f3e312633928bff25a2d8552e70eb5d41a27824f9f",
+  "python": "3.12.15",
+  "machine": "AMD64 Family 23 Model 160 Stepping 0, AuthenticAMD"
+}

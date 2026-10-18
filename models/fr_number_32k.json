@@ -1,0 +1,11 @@
+{
+  "pattern": "fr_number",
+  "requested_vocab_size": 32000,
+  "vocab_size": 32000,
+  "merges": 31744,
+  "train_file": "data/processed/train_wiki.jsonl",
+  "train_seconds": 147.6,
+  "fingerprint": "fceb751dc41a3a2aaf53334d0812faebaecb0a44bfdeddd5daa634f0f4247e65",
+  "python": "3.12.15",
+  "machine": "AMD64 Family 23 Model 160 Stepping 0, AuthenticAMD"
+}

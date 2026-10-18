@@ -1,0 +1,11 @@
+{
+  "pattern": "gpt4",
+  "requested_vocab_size": 8000,
+  "vocab_size": 8000,
+  "merges": 7744,
+  "train_file": "data/processed/train_wiki.jsonl",
+  "train_seconds": 121.7,
+  "fingerprint": "3f41825e02861534e73caa2c7d6c84c00dea0dd2e8c516d88edf564995c7db6c",
+  "python": "3.12.15",
+  "machine": "AMD64 Family 23 Model 160 Stepping 0, AuthenticAMD"
+}
