@@ -83,6 +83,12 @@ def peak_rss_bytes() -> int:
         if not get_info(get_process(), ctypes.byref(counters), counters.cb):
             raise OSError("GetProcessMemoryInfo failed")
         return int(counters.PeakWorkingSetSize)
+    # Linux: VmHWM, not ru_maxrss. ru_maxrss survives execve, so a child
+    # started by this script inherits the parent's peak if it is higher (the
+    # first Pi run showed the same value for the C tool and the baseline).
+    for line in (read_text("/proc/self/status") or "").splitlines():
+        if line.startswith("VmHWM:"):
+            return int(line.split()[1]) * 1024
     import resource
 
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss

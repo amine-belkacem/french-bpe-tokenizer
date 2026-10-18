@@ -53,6 +53,21 @@ static double now_seconds(void)
 #endif
 }
 
+#if defined(__linux__)
+/* VmHWM ("high water mark") from /proc/self/status, in bytes, or 0. */
+static unsigned long long linux_vm_hwm(void)
+{
+    FILE *f = fopen("/proc/self/status", "r");
+    if (f == NULL) return 0;
+    char line[256];
+    unsigned long long kb = 0;
+    while (fgets(line, sizeof line, f) != NULL)
+        if (sscanf(line, "VmHWM: %llu kB", &kb) == 1) break;
+    fclose(f);
+    return kb * 1024u;
+}
+#endif
+
 /* Highest resident memory of this process so far, in bytes. */
 static unsigned long long peak_rss_bytes(void)
 {
@@ -62,6 +77,14 @@ static unsigned long long peak_rss_bytes(void)
         return (unsigned long long)pmc.PeakWorkingSetSize;
     return 0;
 #else
+#if defined(__linux__)
+    /* Not getrusage(): on Linux ru_maxrss survives execve, so a program
+     * started from Python reports Python's peak if it is higher. The first
+     * Pi run showed exactly that (same value for C and the Python baseline).
+     * VmHWM belongs to the new address space and starts from zero. */
+    unsigned long long hwm = linux_vm_hwm();
+    if (hwm != 0) return hwm;
+#endif
     struct rusage usage;
     if (getrusage(RUSAGE_SELF, &usage) != 0) return 0;
 #ifdef __APPLE__
