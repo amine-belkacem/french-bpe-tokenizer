@@ -1,0 +1,2 @@
+# LF everywhere: the merges files are hashed and will be read by C code.
+* text=auto eol=lf

@@ -1,0 +1,10 @@
+# Pinned versions used for every published measurement.
+regex==2026.9.29
+pyarrow==26.0.0
+numpy==2.5.4
+matplotlib==3.11.2
+tiktoken==0.14.0
+sentencepiece==0.2.2
+requests==2.34.2
+pytest==9.1.1
+pytest-cov==7.1.0

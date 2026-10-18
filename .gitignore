@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Data is downloaded and rebuilt by the scripts, never committed
+data/raw/
+data/processed/
+
+# C build output
+build/
