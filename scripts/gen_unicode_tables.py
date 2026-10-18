@@ -71,18 +71,28 @@ def render(tables: dict[str, list[tuple[int, int]]], folds: dict[str, list[int]]
         out.append("};")
         out.append(f"#define FRBPE_{name.upper()}_LEN {len(ranges)}u")
         out.append("")
-    # Case-insensitive matching: FRBPE_FOLD[c - 'a'] lists the code points
-    # that (?i:c) accepts, padded with 0 (never a valid match here).
-    width = max(len(v) for v in folds.values())
-    out.append(f"#define FRBPE_FOLD_WIDTH {width}u")
-    out.append(f"static const uint32_t FRBPE_FOLD[26][FRBPE_FOLD_WIDTH] = {{")
-    for letter in string.ascii_lowercase:
-        cps = folds[letter] + [0] * (width - len(folds[letter]))
-        out.append("    {" + ", ".join(f"0x{c:X}" for c in cps) + f"}},  /* {letter} */")
+    # Case-insensitive matching. Inside ASCII, (?i:x) accepts exactly x and X
+    # (checked in main). Outside ASCII it accepts a handful of code points,
+    # listed here with the letter they fold to.
+    extras = sorted((cp, letter) for letter, cps in folds.items() for cp in cps if cp >= 0x80)
+    out.append("typedef struct { uint32_t cp; char letter; } frbpe_fold;")
+    out.append("static const frbpe_fold FRBPE_FOLD_EXTRA[] = {")
+    for cp, letter in extras:
+        out.append(f"    {{0x{cp:X}, '{letter}'}},")
     out.append("};")
+    out.append(f"#define FRBPE_FOLD_EXTRA_LEN {len(extras)}u")
     out.append("")
     out.append("#endif")
     return "\n".join(out) + "\n"
+
+
+def check_ascii_folds(folds: dict[str, list[int]]) -> None:
+    """The C code relies on this: in ASCII, (?i:x) means x or X, nothing else."""
+    for letter, cps in folds.items():
+        ascii_part = sorted(cp for cp in cps if cp < 0x80)
+        expected = sorted([ord(letter), ord(letter.upper())])
+        if ascii_part != expected:
+            raise SystemExit(f"(?i:{letter}) matches {ascii_part} in ASCII, expected {expected}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -91,12 +101,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     tables = {name: ranges_of(pattern) for name, pattern in CLASSES.items()}
     folds = {letter: case_variants(letter) for letter in string.ascii_lowercase}
+    check_ascii_folds(folds)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(render(tables, folds), encoding="utf-8", newline="\n")
     for name, ranges in tables.items():
         print(f"{name:7s} {len(ranges):5d} ranges")
-    unusual = {k: [hex(c) for c in v if chr(c).lower() != k] for k, v in folds.items()}
-    print("non-ASCII case variants:", {k: v for k, v in unusual.items() if v})
+    extras = {k: [hex(c) for c in v if c >= 0x80] for k, v in folds.items()}
+    print("non-ASCII case variants:", {k: v for k, v in extras.items() if v})
     return 0
 
 

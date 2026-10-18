@@ -14,3 +14,6 @@ data/reference/
 
 # C build output
 build/
+
+# Tools installed locally by scripts/run_pi_benchmark.sh
+.tools/

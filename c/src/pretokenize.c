@@ -60,34 +60,49 @@ static int is_word_prefix(uint32_t c) { return !is_newline(c) && !is_letter(c) &
 /* [^\s\p{L}\p{N}] : punctuation and symbols */
 static int is_punct(uint32_t c) { return !is_space(c) && !is_letter(c) && !is_number(c); }
 
-/* (?i:x) for one ASCII letter x, using the case variants of the regex module. */
-static int ci_char(uint32_t c, char lower)
+/*
+ * The ASCII letter that (?i:x) would match `c` against, or 0. In ASCII that is
+ * just the lowercase letter (the generator checks it); outside ASCII only the
+ * few code points of FRBPE_FOLD_EXTRA qualify (İ, ſ, the Kelvin sign).
+ */
+static char fold_to_ascii(uint32_t c)
 {
-    const uint32_t *variants = FRBPE_FOLD[lower - 'a'];
-    for (size_t k = 0; k < FRBPE_FOLD_WIDTH; k++)
-        if (variants[k] != 0 && variants[k] == c) return 1;
+    if (c < 0x80) {
+        uint32_t lower = c | 0x20u;
+        return (lower >= 'a' && lower <= 'z') ? (char)lower : 0;
+    }
+    for (size_t k = 0; k < FRBPE_FOLD_EXTRA_LEN; k++)
+        if (FRBPE_FOLD_EXTRA[k].cp == c) return FRBPE_FOLD_EXTRA[k].letter;
     return 0;
 }
 
+static int ci_char(uint32_t c, char lower) { return fold_to_ascii(c) == lower; }
+
+typedef struct {
+    const char *text;  /* lowercase ASCII */
+    size_t len;
+} ascii_word;
+
+#define WORD(s) {s, sizeof(s) - 1}
+
 /* (?i:word) at position i: returns the number of code points matched or 0. */
-static size_t ci_word(const uint32_t *cp, size_t n, size_t i, const char *word)
+static size_t ci_word(const uint32_t *cp, size_t n, size_t i, const ascii_word *word)
 {
-    size_t len = strlen(word);
-    if (len > n - i) return 0;
-    for (size_t k = 0; k < len; k++)
-        if (!ci_char(cp[i + k], word[k])) return 0;
-    return len;
+    if (word->len > n - i) return 0;
+    for (size_t k = 0; k < word->len; k++)
+        if (!ci_char(cp[i + k], word->text[k])) return 0;
+    return word->len;
 }
 
 /* '(?i:[sdmt]|ll|ve|re) */
 static size_t match_contraction(const uint32_t *cp, size_t n, size_t i)
 {
-    static const char *const two_letters[] = {"ll", "ve", "re"};
+    static const ascii_word two_letters[] = {WORD("ll"), WORD("ve"), WORD("re")};
     if (cp[i] != CP_APOSTROPHE || i + 1 >= n) return 0;
-    uint32_t c = cp[i + 1];
-    if (ci_char(c, 's') || ci_char(c, 'd') || ci_char(c, 'm') || ci_char(c, 't')) return 2;
-    for (size_t k = 0; k < 3; k++)
-        if (ci_word(cp, n, i + 1, two_letters[k])) return 3;
+    char c = fold_to_ascii(cp[i + 1]);
+    if (c == 's' || c == 'd' || c == 'm' || c == 't') return 2;
+    for (size_t k = 0; k < sizeof two_letters / sizeof two_letters[0]; k++)
+        if (ci_word(cp, n, i + 1, &two_letters[k])) return 3;
     return 0;
 }
 
@@ -100,13 +115,14 @@ static size_t skip_word_prefix(const uint32_t *cp, size_t n, size_t i)
 /* [^\r\n\p{L}\p{N}]?+(?i:aujourd['’]hui)\b */
 static size_t match_aujourdhui(const uint32_t *cp, size_t n, size_t i)
 {
+    static const ascii_word aujourd = WORD("aujourd"), hui = WORD("hui");
     size_t j = skip_word_prefix(cp, n, i);
-    size_t k = ci_word(cp, n, j, "aujourd");
+    size_t k = ci_word(cp, n, j, &aujourd);
     if (k == 0) return 0;
     j += k;
     if (j >= n || !is_apostrophe(cp[j])) return 0;
     j++;
-    k = ci_word(cp, n, j, "hui");
+    k = ci_word(cp, n, j, &hui);
     if (k == 0) return 0;
     j += k;
     /* \b: word character before, non-word character (or end) after. */
@@ -119,16 +135,27 @@ static size_t match_aujourdhui(const uint32_t *cp, size_t n, size_t i)
  * [^\r\n\p{L}\p{N}]?+(?i:jusqu|lorsqu|puisqu|quoiqu|presqu|quelqu|qu|[cdjlmnst])['’](?=\p{L})
  * The alternation is the one place that backtracks: if a word matches but no
  * apostrophe follows, the next word of the list is tried, in the same order.
+ *
+ * This branch runs at the start of every chunk, so it has to reject fast:
+ * a word is only tried if its first letter matches. Most chunks start with a
+ * letter that begins no elided word and leave after one fold_to_ascii call.
+ * (The first version tried all 15 words each time and made the whole French
+ * encoder about 35 % slower than the GPT-4 one.)
  */
 static size_t match_elision(const uint32_t *cp, size_t n, size_t i)
 {
-    static const char *const words[] = {
-        "jusqu", "lorsqu", "puisqu", "quoiqu", "presqu", "quelqu", "qu",
-        "c", "d", "j", "l", "m", "n", "s", "t",
+    static const ascii_word words[] = {
+        WORD("jusqu"), WORD("lorsqu"), WORD("puisqu"), WORD("quoiqu"), WORD("presqu"),
+        WORD("quelqu"), WORD("qu"), WORD("c"), WORD("d"), WORD("j"), WORD("l"),
+        WORD("m"), WORD("n"), WORD("s"), WORD("t"),
     };
     size_t j = skip_word_prefix(cp, n, i);
+    if (j >= n) return 0;
+    char first = fold_to_ascii(cp[j]);
+    if (first == 0) return 0;
     for (size_t w = 0; w < sizeof words / sizeof words[0]; w++) {
-        size_t k = ci_word(cp, n, j, words[w]);
+        if (words[w].text[0] != first) continue;
+        size_t k = ci_word(cp, n, j, &words[w]);
         if (k == 0) continue;
         size_t a = j + k;  /* position of the apostrophe */
         if (a + 1 < n && is_apostrophe(cp[a]) && is_letter(cp[a + 1])) return a + 1 - i;

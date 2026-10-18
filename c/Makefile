@@ -17,6 +17,7 @@ endif
 
 ifeq ($(OS),Windows_NT)
 EXE := .exe
+BENCH_LIBS := -lpsapi
 endif
 
 BUILD := build
@@ -25,10 +26,11 @@ OBJ := $(SRC:src/%.c=$(BUILD)/%.o)
 LIB := $(BUILD)/libfrbpe.a
 CLI := $(BUILD)/frbpe_cli$(EXE)
 TEST := $(BUILD)/test_frbpe$(EXE)
+BENCH := $(BUILD)/frbpe_bench$(EXE)
 
 .PHONY: all test clean
 
-all: $(CLI)
+all: $(CLI) $(BENCH)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -42,10 +44,13 @@ $(LIB): $(OBJ)
 $(CLI): tools/frbpe_cli.c $(LIB)
 	$(CC) $(CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
 
+$(BENCH): tools/frbpe_bench.c $(LIB)
+	$(CC) $(CFLAGS) $< $(LIB) $(LDFLAGS) $(BENCH_LIBS) -o $@
+
 $(TEST): tests/test_frbpe.c $(LIB)
 	$(CC) $(CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
 
-test: $(TEST) $(CLI)
+test: $(TEST) $(CLI) $(BENCH)
 	./$(TEST)
 
 clean:

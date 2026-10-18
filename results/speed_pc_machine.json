@@ -1,0 +1,16 @@
+{
+  "cpu": "AMD Ryzen 3 7320U with Radeon Graphics",
+  "os": "Windows-11-10.0.26300-SP0",
+  "python": "3.12.15",
+  "tiktoken": "0.14.0",
+  "sentencepiece": "0.2.2",
+  "gcc": "gcc.EXE (GCC) 16.2.0",
+  "cpu_governor": null,
+  "logical_cpus": 8,
+  "temperature_start_c": null,
+  "repeats": 10,
+  "corpus": "data/processed/test_wiki.jsonl",
+  "temperature_end_c": null,
+  "duration_s": 77.8,
+  "baseline_python_rss_mb": 30.80192
+}
