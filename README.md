@@ -1,10 +1,77 @@
 # french-bpe-tokenizer
 
-A byte-level BPE tokenizer that I am writing from scratch, trained on French text,
-and measured against the tokenizers of large models (tiktoken, SentencePiece).
+[![tests](https://github.com/amine-belkacem/french-bpe-tokenizer/actions/workflows/tests.yml/badge.svg)](https://github.com/amine-belkacem/french-bpe-tokenizer/actions/workflows/tests.yml)
 
-Work in progress. This README grows with each milestone; for now it only covers
-the data.
+I wrote a byte-level BPE tokenizer from scratch, trained it on French
+Wikipedia, gave it a pre-tokenization regex designed for French, measured it
+against the tokenizers of GPT-2, GPT-4, GPT-4o, Mistral and CamemBERT, and
+rewrote its encoder in C so it runs on a Raspberry Pi 5.
+
+## In short
+
+- **The same French text costs 27 % more tokens with GPT-4's tokenizer and
+  11 % more with GPT-4o's** than with my 32k French tokenizer (held-out
+  Wikipedia). On 19th-century novels, which no tokenizer here was trained on,
+  the gap with GPT-4o shrinks to 1.3 %.
+- **A French-aware regex helps, but only a little:** −2.45 % tokens on
+  Wikipedia, −0.41 % on the novels, against the GPT-4 regex with everything
+  else identical. Most of the gain comes from numbers, not from elisions.
+- **The C encoder gives exactly the Python ids** (0 of 2,340 test documents
+  differ, 9 models, ~28 M tokens) and runs at **19.8 MB/s on the PC and
+  14.4 MB/s on the Pi**, single thread, with an 8.5 MB peak on the Pi.
+- **Specialisation has a price:** on upper-case text my tokenizer needs 3.6
+  tokens per word, worse than every existing model I tested.
+
+![Fertility of nine tokenizers on French](figures/comparison_fertility.png)
+
+## Spec against result
+
+I wrote a short spec before starting. Here is how it ended:
+
+| Requirement | Target | Result |
+|---|---|---|
+| Lossless: `decode(encode(x)) == x` | 100 % | 100 % of the 2,340 test documents, plus random Unicode |
+| Deterministic training | same file twice | identical SHA-256 on two 32k runs |
+| Vocabularies | 8k, 16k, 32k | done, 9 models in `models/` |
+| French vs GPT-4 regex | measured with a CI, whatever the result | −2.45 % [−2.57, −2.33] on Wikipedia |
+| Reference tokenizers | at least 5 | 7 (5 existing + 2 SentencePiece retrained on my corpus) |
+| C encoder identical to Python | 0 difference | 0 of 2,340 documents, 9 models |
+| ASan / UBSan in CI | 0 error | 0, with gcc and clang |
+| C speed vs Python | ≥ 10× (not promised) | 12.7× on the PC, **9.6× on the Pi** |
+| Training 32k on the PC | < 1 hour | about 145 s |
+| Test coverage of the Python package | ≥ 90 % | 95.5 % |
+| Everything rebuilt by one command | yes | `scripts/reproduce.sh` (speed excluded: machine-dependent) |
+
+## What is in this repository
+
+```
+src/frbpe/          Python package: BPE training and encoding, pre-tokenization
+                    regexes, metrics with bootstrap, text perturbations
+c/                  C99 encoder: library, command line tool, benchmark, unit tests
+scripts/            data download, training, every experiment, plots, reproduce.sh
+tests/              pytest suite, including C vs Python differential tests
+models/             the 9 trained BPE models and 2 SentencePiece models
+results/            every table as CSV, segmentation examples as Markdown
+figures/            every figure of this README
+```
+
+## Quick start
+
+```bash
+pip install -r requirements.txt
+make -C c test                       # needs gcc and make
+pytest
+```
+
+```python
+from frbpe.bpe import BPETokenizer
+
+tok = BPETokenizer.load("models/fr_32k.bpe")
+ids = tok.encode("L'école d'été est fermée aujourd'hui.")
+print([tok.token_str(i) for i in ids])
+# ["L'", 'école', " d'", 'été', ' est', ' fermée', " aujourd'hui", '.']
+assert tok.decode(ids) == "L'école d'été est fermée aujourd'hui."
+```
 
 ## Data
 
@@ -45,31 +112,15 @@ Known limitations of the data:
   order of article ids.
 - The novels keep their table of contents.
 
-Sources and licences:
-
-- Wikipedia: [`wikimedia/wikipedia`](https://huggingface.co/datasets/wikimedia/wikipedia),
-  revision `b04c8d1`, CC BY-SA 3.0 / GFDL.
-- Project Gutenberg books 17489, 14155, 5711, 17989, 19657, 798, 4791, 13951
-  (Hugo, Flaubert, Zola, Dumas, Stendhal, Verne), public domain.
-
-## The tokenizer (milestone 1)
+## The tokenizer
 
 `src/frbpe/bpe.py` is a byte-level BPE in plain Python: the 256 byte values
 are the base vocabulary, so any UTF-8 text can be encoded and nothing is ever
 "unknown". Before BPE runs, a regex cuts the text into chunks
-(`src/frbpe/pretokenize.py`). For now it is the GPT-4 (`cl100k_base`) pattern,
-copied from tiktoken.
+(`src/frbpe/pretokenize.py`), and BPE never merges across two chunks.
 
 ```bash
-python scripts/train_tokenizer.py --vocab-size 32000 --pattern gpt4
-```
-
-```python
-from frbpe.bpe import BPETokenizer
-
-tok = BPETokenizer.load("models/gpt4_32k.bpe")
-ids = tok.encode("Les élèves mangeaient des pommes.")
-assert tok.decode(ids) == "Les élèves mangeaient des pommes."
+python scripts/train_tokenizer.py --vocab-size 32000 --pattern fr
 ```
 
 How training stays fast enough in Python: chunks are counted once
@@ -82,9 +133,7 @@ everything after each merge.
 Ties between pairs with the same count are broken by taking the smallest pair
 of ids. Without a fixed rule, two runs could learn different vocabularies.
 
-What I measured so far (one machine, AMD Ryzen, Python 3.12, single process):
-
-| Check | Result |
+| Check (AMD Ryzen 3 7320U, Python 3.12, single process) | Result |
 |---|---|
 | Training, 32k vocab, 100 MB of Wikipedia | 148.8 s and 142.3 s (2 runs) |
 | Same merges file on both runs | yes, identical SHA-256 |
@@ -92,9 +141,9 @@ What I measured so far (one machine, AMD Ryzen, Python 3.12, single process):
 
 Only 31,744 merges are learned for a 32k vocabulary: 256 ids are the raw bytes.
 
-The first thing the trained model shows is the problem the next milestone deals
-with. With the GPT-4 regex, the apostrophe of a French elision is glued to the
-*next* word:
+With the GPT-4 regex, the first trained model showed the problem the next
+section deals with: the apostrophe of a French elision is glued to the *next*
+word.
 
 ```
 L | 'école |  d | 'été |  est |  aujourd | 'hui |  fermée | .
@@ -103,7 +152,7 @@ L | 'école |  d | 'été |  est |  aujourd | 'hui |  fermée | .
 So `'école`, `'été` and `'hui` become tokens of their own, and the same word
 gets a different token depending on what precedes it (`école` vs `'école`).
 
-## Does a French regex help? (milestone 2)
+## Does a French regex help?
 
 I wrote three French rules (`src/frbpe/pretokenize.py`), each replacing one
 piece of the GPT-4 pattern:
@@ -138,9 +187,10 @@ rule. Here is what I understand of the numbers:
 - **Elision matters more in novels**, which have more dialogue and more
   `qu'`, `j'`, `n'`. It is still below 1 %, because BPE copes with the GPT-4
   split on its own: it simply learns `'école` as an extra token. I counted
-  them: the GPT-4 32k vocabulary has **1,384 tokens that start with an
-  apostrophe**, the French one has 10. The French regex frees those slots, but
-  they go to rarer words, which do not save much.
+  them: the GPT-4 32k vocabulary has **1,509 tokens that start with an
+  apostrophe** (1,244 with `'`, 265 with `’`), the French one has 28. The
+  French regex frees those slots, but they go to rarer words, which do not
+  save much.
 - **The no-break space rule makes the novels slightly worse.** The novels
   contain no no-break space at all; I checked that this rule changes the
   chunking of 0 out of 351 novel documents. The +0.14 % comes from the
@@ -164,30 +214,15 @@ documents, which the paired comparison cancels out.
 | GPT-4 regex | 1.476 [1.461, 1.491] | 1.456 [1.450, 1.463] |
 | French regex | 1.440 [1.426, 1.454] | 1.450 [1.444, 1.457] |
 
-Full tables: `results/ablation_fertility.csv` and `results/ablation_vs_gpt4.csv`
-(both open in a spreadsheet). To rebuild them:
+A word here is a run of letters and digits, so `l'école` counts as 2 words.
+Absolute fertilities depend on that rule; the relative changes do not (the
+word count cancels out when two tokenizers are compared on the same text).
+Full tables: `results/ablation_fertility.csv` and `results/ablation_vs_gpt4.csv`.
 
-```bash
-python scripts/train_tokenizer.py --pattern fr --vocab-size 32000   # and the others
-python scripts/evaluate_ablation.py
-```
-
-Limits of this experiment:
-
-- A word here is a run of letters and digits, so `l'école` counts as 2 words.
-  Absolute fertilities depend on that rule; the relative changes above do not
-  (the word count cancels out when two tokenizers are compared).
-- One training corpus, one seed. BPE training is deterministic, so a second
-  run would give the same numbers, but a different Wikipedia sample could move
-  them a little.
-- The training times written in `models/*.json` for this milestone were taken
-  while other heavy jobs were running on the machine. They are not a speed
-  benchmark; that comes in milestone 5.
-
-## Against the tokenizers of existing models (milestone 3)
+## Against the tokenizers of existing models
 
 Nine tokenizers on the same two test sets. Four are trained on my corpus
-(blue), five come from existing models (grey):
+(blue in the figure at the top), five come from existing models (grey):
 
 | Tokenizer | Vocab | Trained on |
 |---|---|---|
@@ -198,8 +233,6 @@ Nine tokenizers on the same two test sets. Four are trained on my corpus
 | Mistral 7B v0.1 | 32k | not disclosed |
 | GPT-2 | 50k | English WebText, per the GPT-2 paper |
 | cl100k_base (GPT-4), o200k_base (GPT-4o) | 100k / 200k | not disclosed |
-
-![Fertility of nine tokenizers](figures/comparison_fertility.png)
 
 | Extra tokens vs frbpe-fr-32k (95 % CI) | Wikipedia | Novels | `decode(encode(x)) == x` |
 |---|---|---|---|
@@ -221,9 +254,7 @@ What I take from it, and what I do not:
 - **This is not "my tokenizer beats GPT-4o".** frbpe is French-only, and its
   Wikipedia test set comes from the same source as its training data. The
   big tokenizers share their vocabulary between dozens of languages and code.
-  What the table does measure is the price French pays in those tokenizers:
-  the same text costs 27 % more tokens with GPT-4's tokenizer than with a
-  32k French one, 11 % more with GPT-4o's.
+  What the table does measure is the price French pays in those tokenizers.
 - **The novels are the fairer test**, since no tokenizer here was trained on
   them. The gap with GPT-4o shrinks to 1.3 %: a 200k multilingual vocabulary
   covers literary French almost as well as a 32k French one.
@@ -246,15 +277,9 @@ What I take from it, and what I do not:
   vocabulary built mostly for English: `␣ferm|ée`, `␣él|è|ves`.
 
 Reference files are downloaded by `scripts/download_reference.py` (about
-8 MB, checked by SHA-256) and are not committed:
+8 MB, checked by SHA-256) and are not committed.
 
-```bash
-python scripts/download_reference.py
-python scripts/train_sentencepiece.py
-python scripts/compare_tokenizers.py
-```
-
-## A C encoder that gives the same ids (milestone 4)
+## A C encoder that gives the same ids
 
 `c/` is an encoder in C99 with no dependency beyond the standard library, so
 it can run where Python cannot. It loads the same `models/*.bpe` files and
@@ -262,7 +287,7 @@ must produce exactly the ids of the Python reference. Training stays in
 Python.
 
 ```bash
-make -C c test          # library, command line tool, C unit tests
+make -C c test          # library, command line tool, benchmark, C unit tests
 make -C c SAN=1 test    # same under AddressSanitizer + UBSan (Linux)
 ```
 
@@ -304,6 +329,7 @@ How I know it matches:
 | Ids vs Python, real 32k models, 2,008 strings | identical |
 | **Ids vs Python, 9 models × all 2,340 test documents (~28 M tokens)** | **0 documents differ** |
 | CI: gcc and clang, ASan + UBSan, unit and differential tests | run on every push |
+| Same differential test on the Raspberry Pi 5 (aarch64) | identical |
 
 To check that the differential test can fail, I removed the narrow no-break
 space from the C French rules: exactly the 4 tests that depend on it failed,
@@ -327,7 +353,7 @@ On Windows I build with [w64devkit](https://github.com/skeeto/w64devkit)
 2.10.0 (gcc 16.2). MinGW has no sanitizers, so ASan and UBSan only run in CI
 on Linux.
 
-## Speed and memory, PC and Raspberry Pi 5 (milestone 5)
+## Speed and memory, PC and Raspberry Pi 5
 
 Every tokenizer encodes the 1,989 documents of the Wikipedia test set (5 MB)
 one at a time, on a single thread. One untimed warm-up pass, then 10 timed
@@ -378,7 +404,7 @@ adds on top of a Python process that already holds the corpus. Full tables:
 `results/speed_pc.csv`, `results/speed_pi5.csv`, with the machine description
 in the matching `_machine.json` files.
 
-### What went wrong on the way, and stayed in the repo
+What went wrong on the way, and stayed in the repo:
 
 - **The French regex was 35 % slower in C, at first.** The first PC run
   (`results/speed_pc_v1.csv`) gave 13.1 MB/s for the French regex and 21.0 for
@@ -393,10 +419,10 @@ in the matching `_machine.json` files.
   `/proc/self/status` on Linux. Windows was not affected.
 - **One Pi run was too noisy to publish.** After that fix, the second Pi run
   had up to 21 % standard deviation (for example 11.85 ± 2.26 MB/s for the C
-  encoder), against at most 7.8 % on the first one with the same timing code. I
-  did not find the cause; the likely one is that the Pi was in use. The third
-  run, with every window closed and the USB stick removed, is the one in the
-  tables (3 % or less for every tokenizer except cl100k_base, which stays
+  encoder), against at most 7.8 % on the first one with the same timing code.
+  I did not find the cause; the likely one is that the Pi was in use. The
+  third run, with every window closed and the USB stick removed, is the one in
+  the tables (3 % or less for every tokenizer except cl100k_base, which stays
   around 5 % on all three runs). The two discarded runs are kept as
   `results/speed_pi5_run1_rssbug.csv` and `results/speed_pi5_run2_noisy.csv`.
 
@@ -410,11 +436,11 @@ It installs Python 3.12 and the pinned packages inside the project folder,
 downloads the data, checks the test set is byte-identical to the PC one,
 re-runs the C/Python differential test on the Pi, then measures.
 
-## Robustness: the same text, written differently (milestone 6)
+## Robustness: the same text, written differently
 
 Real French text is not always clean NFC with straight apostrophes. I
 applied five perturbations to both test sets (`src/frbpe/perturb.py`) and
-counted tokens again with the nine tokenizers of milestone 3:
+counted tokens again with the nine tokenizers of the comparison:
 
 | Perturbation | Example | Where it happens |
 |---|---|---|
@@ -444,24 +470,24 @@ What it shows:
 - **Upper case is where specialisation costs the most.** On the Wikipedia
   test set, all four tokenizers trained on my 100 MB of Wikipedia end up at
   3.6 tokens per word (+111 to +150 % over both test sets), worse than every
-  existing model, GPT-2 included (2.79). Wikipedia has almost no text in capitals, so the vocabulary never
-  learned it. This is the price of a small monolingual training set, and the
-  first thing I would fix (by adding upper-case text to the training data,
-  which I have not done).
+  existing model, GPT-2 included (2.79). Wikipedia has almost no text in
+  capitals, so the vocabulary never learned it. This is the price of a small
+  monolingual training set, and the first thing I would fix (by adding
+  upper-case text to the training data, which I have not done).
 - **NFD costs every tokenizer that does not normalise: +24 to +39 % for mine,
   +9 to +17 % for the big ones.** My regex cuts NFD words at each combining
-  mark (`e`, `́te`), but SentencePiece BPE, which has no regex at all,
-  pays almost as much (+35.5 % against +39.0 % on Wikipedia), so most of the
-  cost comes from a vocabulary learned on NFC text. CamemBERT pays
-  **nothing**: its NFKC normalisation recomposes the accents before
-  tokenizing. Here being lossy is an advantage.
+  mark, but SentencePiece BPE, which has no regex at all, pays almost as much
+  (+35.5 % against +39.0 % on Wikipedia), so most of the cost comes from a
+  vocabulary learned on NFC text. CamemBERT pays **nothing**: its NFKC
+  normalisation recomposes the accents before tokenizing. Here being lossy is
+  an advantage.
 - **Curly apostrophes: the French regex is the most robust.** +0.04 % on
-  Wikipedia against +0.99 % for the same BPE with the GPT-4 regex. I checked
-  the vocabularies: with the GPT-4 regex, 1,244 tokens start with `'`
-  (`'école`) but only 265 with `’`, so switching apostrophes breaks most of
-  them. With the French regex the apostrophe stays on the elided word, and
-  the vocabulary holds both forms of the common ones (42 with `'`, 18 with
-  `’`); the word after it does not change.
+  Wikipedia against +0.99 % for the same BPE with the GPT-4 regex. With the
+  GPT-4 regex, 1,244 tokens start with `'` (`'école`) but only 265 with `’`,
+  so switching apostrophes breaks most of them. With the French regex the
+  apostrophe stays on the elided word, and the vocabulary holds both forms
+  of the common ones (42 with `'`, 18 with `’`); the word after it does not
+  change.
 - **Removing accents costs mine +5 to +11 %, and helps GPT-2 (−7 %).** An
   English-centric vocabulary is more at ease with French written in ASCII.
 - **Every tokenizer stays lossless** on the perturbed text except CamemBERT,
@@ -472,16 +498,63 @@ share of documents each perturbation actually touches; for example, none of
 the novels has a no-break space). Examples of segmentation:
 [`results/robustness_examples.md`](results/robustness_examples.md).
 
+## Limits
+
+- **No language model was trained.** Fewer tokens per word does not prove a
+  better LLM; I only measured compression, speed, memory and robustness.
+- **One training corpus**: one shard of French Wikipedia, with template
+  content missing. A different sample could move the numbers a little.
+- **Upper-case and NFD text** are handled badly by my tokenizers (see
+  robustness). Both have known fixes I did not apply: more varied training
+  text, and NFC normalisation before encoding (which gives up losslessness
+  for NFD input).
+- **Speed was measured on two machines, one clean run each** for the final
+  numbers. On the Pi, two clean runs differed by up to 5 %.
+- **The C encoder has no cache of already-encoded chunks**, unlike the Python
+  one. It could be faster; I kept it simple.
+
+## Reproduce everything
+
 ```bash
-python scripts/robustness.py
+bash scripts/reproduce.sh            # data, tests, every table and figure (~15 min)
+bash scripts/reproduce.sh --train    # same, retraining all models first (+ ~30 min)
 ```
+
+With the committed models, the script rebuilds every CSV and PNG in
+`results/` and `figures/` byte for byte: I checked that `git status` shows no
+change afterwards. Training is deterministic too. For BPE, two 32k runs gave
+the same SHA-256. For SentencePiece, a retrained model in another folder had
+a different hash, which worried me until I compared the contents: pieces,
+scores and order are identical, and only the output path stored inside the
+file (`model_prefix`) differs. Speed is the exception, since it depends on the machine:
+`python scripts/benchmark.py --tag <name>` on a quiet machine, or
+`scripts/run_pi_benchmark.sh` on a Pi.
 
 ## Tests
 
 ```bash
-pip install -r requirements.txt
-pytest
+pytest                 # Python: 94 tests, 95.5 % coverage of src/frbpe
+make -C c test         # C unit tests (expected values worked out by hand)
 ```
 
-The tests never touch `data/`; they build tiny corpora whose expected merges
-are worked out by hand in the comments (see `tests/test_bpe.py`).
+Expected values are derived by hand in the test comments (see
+`tests/test_bpe.py` for the classic `aaabdaaabac` example). Before trusting a
+test, I break its expected value on purpose and check that it fails. The C vs
+Python differential tests are skipped if `c/build/frbpe_cli` is not built; CI
+builds it with sanitizers and runs them.
+
+## Sources and licences
+
+- Code: MIT, see `LICENSE`.
+- French Wikipedia: [`wikimedia/wikipedia`](https://huggingface.co/datasets/wikimedia/wikipedia),
+  revision `b04c8d1`, CC BY-SA 3.0 / GFDL. Only derived vocabularies and
+  statistics are published here, not the text.
+- Project Gutenberg books 17489, 14155, 5711, 17989, 19657, 798, 4791, 13951
+  (Hugo, Flaubert, Zola, Dumas, Stendhal, Verne), public domain.
+- Reference tokenizers, downloaded at run time and not redistributed:
+  [tiktoken](https://github.com/openai/tiktoken) encodings (MIT),
+  [Mistral 7B v0.1](https://huggingface.co/mistralai/Mistral-7B-v0.1) (Apache 2.0),
+  [CamemBERT base](https://huggingface.co/almanach/camembert-base) (MIT).
+- Libraries: [regex](https://github.com/mrabarnett/mrab-regex),
+  [sentencepiece](https://github.com/google/sentencepiece), NumPy, Matplotlib,
+  pytest.
