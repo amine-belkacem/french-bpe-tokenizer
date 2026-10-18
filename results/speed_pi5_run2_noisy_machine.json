@@ -1,0 +1,18 @@
+{
+  "cpu": "Raspberry Pi 5 Model B Rev 1.1",
+  "os": "Linux-6.12.34+rpt-rpi-2712-aarch64-with-glibc2.42",
+  "python": "3.12.14",
+  "tiktoken": "0.14.0",
+  "sentencepiece": "0.2.2",
+  "gcc": "gcc (Debian 15.2.0-14) 15.2.0",
+  "cpu_governor": "ondemand",
+  "cpu_max_freq_khz": "2400000",
+  "logical_cpus": 4,
+  "temperature_start_c": 46.85,
+  "repeats": 10,
+  "corpus": "data/processed/test_wiki.jsonl",
+  "temperature_end_c": 58.4,
+  "cpu_freq_end_khz": "2000000",
+  "duration_s": 96.8,
+  "baseline_python_rss_mb": 27.623424
+}

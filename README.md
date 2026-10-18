@@ -281,9 +281,10 @@ the pattern by hand. Two things made it tractable:
 - **Unicode tables generated from the reference itself.**
   `scripts/gen_unicode_tables.py` asks the Python `regex` module, code point by
   code point, what is a letter, a number, a space or a word character. Both
-  sides then agree on the Unicode version. It also found two case-folding
-  surprises I would not have guessed: `(?i:s)` matches `ſ` (U+017F) and
-  `(?i:i)` matches `İ` (U+0130).
+  sides then agree on the Unicode version. It also found three case-folding
+  surprises I would not have guessed: `(?i:s)` matches `ſ` (U+017F),
+  `(?i:i)` matches `İ` (U+0130) and `(?i:k)` matches the Kelvin sign `K`
+  (U+212A).
 - **Backtracking written out where it matters.** Possessive quantifiers are
   plain loops. The whitespace branch `\s*[\r\n]|\s+(?!\S)` and the list of
   elided words are the only places where the regex gives characters back,
@@ -316,14 +317,98 @@ Problems worth mentioning:
   -Werror` caught it on the first Windows build.
 - On Windows, `stdin` and `stdout` are opened in text mode: `\n` becomes
   `\r\n` and byte 0x1A ends the input. The command line tool switches both to
-  binary mode, otherwise every document with a newline came out wrong.
+  binary mode before reading anything; the length-prefixed records would
+  otherwise be corrupted by the first newline.
 - My first differential test trained a toy model inside the test. A guard
   showed it only learned ~190 merges, so it proved little; the test now uses
   the committed 32k models.
 
 On Windows I build with [w64devkit](https://github.com/skeeto/w64devkit)
 2.10.0 (gcc 16.2). MinGW has no sanitizers, so ASan and UBSan only run in CI
-on Linux. Speed is not measured yet; that is the next milestone.
+on Linux.
+
+## Speed and memory, PC and Raspberry Pi 5 (milestone 5)
+
+Every tokenizer encodes the 1,989 documents of the Wikipedia test set (5 MB)
+one at a time, on a single thread. One untimed warm-up pass, then 10 timed
+passes; mean ± standard deviation over those 10. Each tokenizer runs in its
+own process so their memory does not mix. Code: `scripts/benchmark.py`
+(Python side) and `c/tools/frbpe_bench.c` (C side).
+
+| Machine | CPU | OS, compiler | Conditions |
+|---|---|---|---|
+| PC | AMD Ryzen 3 7320U, laptop | Windows 11, gcc 16.2 (w64devkit) | on mains, "Balanced" power plan, other jobs stopped |
+| Pi | Raspberry Pi 5, Cortex-A76 at 2.4 GHz | Kali Linux aarch64, gcc 15.2 | `ondemand` governor, 47 → 55 °C during the run |
+
+![Encoding speed](figures/speed.png)
+
+| MB/s (mean ± std) | PC | Raspberry Pi 5 |
+|---|---|---|
+| **frbpe C, French regex** | **19.82 ± 0.14** | **14.37 ± 0.05** |
+| frbpe C, GPT-4 regex | 21.23 ± 0.51 | 13.43 ± 0.35 |
+| tiktoken o200k_base | 11.96 ± 0.08 | 9.80 ± 0.11 |
+| SentencePiece Unigram 32k | 11.70 ± 0.57 | 10.58 ± 0.13 |
+| tiktoken cl100k_base | 8.43 ± 0.16 | 5.64 ± 0.34 |
+| SentencePiece BPE 32k | 3.37 ± 0.05 | 3.16 ± 0.06 |
+| frbpe Python, French regex | 1.56 ± 0.02 | 1.49 ± 0.04 |
+
+- **C vs my Python reference: 12.7× on the PC, 9.6× on the Pi.** My spec
+  aimed at 10×; it holds on the PC, not quite on the Pi.
+- **C vs tiktoken o200k: 1.66× faster on the PC, 1.47× on the Pi.** Read this
+  with care: the two do not produce the same tokens (32k French vocabulary
+  against 200k multilingual), and tiktoken is called from Python once per
+  document. It says the C encoder is in the same league as a tuned Rust
+  tokenizer, not that it is a better one.
+- **French vs GPT-4 regex in C: same speed.** The PC says GPT-4 is 7 % faster,
+  the Pi says the opposite, and on the Pi the GPT-4 figure moved by 5 %
+  between two clean runs. I do not read a winner into that.
+
+![Peak memory](figures/memory.png)
+
+| Peak memory (MB) | PC | Raspberry Pi 5 |
+|---|---|---|
+| frbpe C (whole process, 5 MB corpus included) | 12.0 | 8.5 |
+| Python process with the corpus loaded, no tokenizer | 30.8 | 27.6 |
+| frbpe Python, above that baseline | +39.4 | +41.2 |
+| tiktoken o200k_base, above baseline | +79.9 | +85.8 |
+| SentencePiece Unigram 32k, above baseline | +16.0 | +16.6 |
+
+The C numbers are a whole process; the Python ones are what the tokenizer
+adds on top of a Python process that already holds the corpus. Full tables:
+`results/speed_pc.csv`, `results/speed_pi5.csv`, with the machine description
+in the matching `_machine.json` files.
+
+### What went wrong on the way, and stayed in the repo
+
+- **The French regex was 35 % slower in C, at first.** The first PC run
+  (`results/speed_pc_v1.csv`) gave 13.1 MB/s for the French regex and 21.0 for
+  GPT-4's. Timing one rule at a time showed that elision alone caused it: at
+  the start of every chunk, it tried all 15 elided words. Filtering on the
+  first letter took it to 19.8 MB/s, with identical ids (re-checked on all
+  2,340 test documents).
+- **Peak memory was wrong on Linux.** On the first Pi run, the C tool and the
+  Python baseline both reported exactly 33.357824 MB. Too exact to be a
+  coincidence: on Linux, `ru_maxrss` survives `execve`, so a program started
+  from Python inherits Python's peak. Both benchmarks now read `VmHWM` from
+  `/proc/self/status` on Linux. Windows was not affected.
+- **One Pi run was too noisy to publish.** After that fix, the second Pi run
+  had up to 21 % standard deviation (for example 11.85 ± 2.26 MB/s for the C
+  encoder), against at most 7.8 % on the first one with the same timing code. I
+  did not find the cause; the likely one is that the Pi was in use. The third
+  run, with every window closed and the USB stick removed, is the one in the
+  tables (3 % or less for every tokenizer except cl100k_base, which stays
+  around 5 % on all three runs). The two discarded runs are kept as
+  `results/speed_pi5_run1_rssbug.csv` and `results/speed_pi5_run2_noisy.csv`.
+
+To run it on a Pi (or any Linux machine), from a fresh clone:
+
+```bash
+bash scripts/run_pi_benchmark.sh
+```
+
+It installs Python 3.12 and the pinned packages inside the project folder,
+downloads the data, checks the test set is byte-identical to the PC one,
+re-runs the C/Python differential test on the Pi, then measures.
 
 ## Tests
 
