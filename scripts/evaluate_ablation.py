@@ -70,7 +70,7 @@ def plot_rules(rows: list[dict], out: Path) -> None:
             [100 * (r["change_high"] - r["change"]) for r in sel],
         ])
         y = np.arange(len(sel))
-        colors = ["#2a6f97" if r["pattern"] == "fr" else "#89b0c9" for r in sel]
+        colors = ["#6250d6" if r["pattern"] == "fr" else "#1baf7a" for r in sel]
         ax.barh(y, values, xerr=err, color=colors, capsize=3)
         ax.axvline(0, color="black", linewidth=0.8)
         ax.set_yticks(y, [RULE_LABELS[r["pattern"]] for r in sel])
@@ -86,7 +86,7 @@ def plot_rules(rows: list[dict], out: Path) -> None:
 def plot_fertility(rows: list[dict], out: Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(10, 3.8))
     for ax, test_set in zip(axes, TEST_SETS):
-        for pattern, color in (("gpt4", "#c44e52"), ("fr", "#2a6f97")):
+        for pattern, color in (("gpt4", "#6250d6"), ("fr", "#1baf7a")):
             sel = sorted(
                 (r for r in rows if r["pattern"] == pattern and r["test_set"] == test_set),
                 key=lambda r: r["vocab"],

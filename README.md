@@ -222,7 +222,7 @@ Full tables: `results/ablation_fertility.csv` and `results/ablation_vs_gpt4.csv`
 ## Against the tokenizers of existing models
 
 Nine tokenizers on the same two test sets. Four are trained on my corpus
-(blue in the figure at the top), five come from existing models (grey):
+(green in the figure at the top), five come from existing models (grey):
 
 | Tokenizer | Vocab | Trained on |
 |---|---|---|

@@ -22,6 +22,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.patches import Patch  # noqa: E402
 import numpy as np  # noqa: E402
 
 from download_reference import DEFAULT_DIR, tiktoken_cache_dir  # noqa: E402
@@ -97,16 +98,21 @@ def plot(rows: list[dict], out: Path) -> None:
         vals = [sel[n]["fertility"] for n in order]
         err = [[sel[n]["fertility"] - sel[n]["fertility_low"] for n in order],
                [sel[n]["fertility_high"] - sel[n]["fertility"] for n in order]]
-        colors = ["#2a6f97" if sel[n]["trained_on"] == SAME_CORPUS else "#b0b0b0" for n in order]
+        colors = ["#1baf7a" if sel[n]["trained_on"] == SAME_CORPUS else "#8a8986" for n in order]
         ax.barh(y, vals, xerr=err, color=colors, capsize=3)
         ax.set_yticks(y, [f"{n} ({sel[n]['vocab_size'] // 1000}k)" for n in order])
         ax.set_xlabel("tokens per word (lower is better)")
         ax.set_title(f"test set: {test_set}")
         ax.invert_yaxis()
         ax.grid(axis="x", alpha=0.3)
-    fig.suptitle("French fertility. Blue: trained on my corpus. Grey: existing models.")
+    # A legend, not only the colour, says which bars are mine.
+    handles = [Patch(color="#1baf7a", label="trained on my corpus"),
+               Patch(color="#8a8986", label="existing model")]
+    # Below the panels: inside, it hid the bars of my own tokenizers.
+    fig.legend(handles=handles, loc="lower center", ncol=2, bbox_to_anchor=(0.5, -0.04))
+    fig.suptitle("Tokens per word on French text, nine tokenizers (95 % CI)")
     fig.tight_layout()
-    fig.savefig(out, dpi=150)
+    fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
 

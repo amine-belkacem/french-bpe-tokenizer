@@ -18,7 +18,7 @@ import numpy as np  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MACHINES = {"pc": "PC (Ryzen 3 7320U)", "pi5": "Raspberry Pi 5"}
-COLORS = {"pc": "#2a6f97", "pi5": "#c44e52"}
+COLORS = {"pc": "#1baf7a", "pi5": "#6250d6"}  # teal and violet: blue/orange only as a last resort
 
 
 def load(tag: str) -> dict[str, dict]:
